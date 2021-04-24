@@ -1,13 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <semaphore.h>
+#include <fcntl.h>
 
+// mmap, munmap
+#include <sys/mman.h>
 
+// struct for input parameters
 typedef struct {
     int numElves;
-    int numRaind;
+    int numReind;
     int timeElf;
-    int timeRaind;
+    int timeReind;
 }params_t;
+
+// struct for semaphores
+typedef struct {
+    sem_t *santa;
+    sem_t *actionCnt;
+}semaphores_t;
 
 int parseParams(char *argv[], params_t *params) {
     char *ptr = NULL;
@@ -18,19 +31,18 @@ int parseParams(char *argv[], params_t *params) {
             // couldn't convert parameter
             return -1;
         }
-
         switch (i) {
             case 1:
                 params->numElves = tmp;
                 break;
             case 2:
-                params->numRaind = tmp;
+                params->numReind = tmp;
                 break;
             case 3:
                 params->timeElf = tmp;
                 break;
             case 4:
-                params->timeRaind = tmp;
+                params->timeReind = tmp;
                 break;
             default:
                 break;
@@ -40,6 +52,24 @@ int parseParams(char *argv[], params_t *params) {
     return 0;
 }
 
+// Initializes semaphores
+int semInit(semaphores_t *sems) {
+    // TODO check if sem_open fails
+    sems->santa = sem_open("santa", O_CREAT, 0644, 0);
+    sems->actionCnt = sem_open("actionCount", O_CREAT, 0644, 1);
+
+    return 0;
+}
+
+void semDestruct(semaphores_t *sems) {
+    sem_close(sems->santa);
+    sem_close(sems->actionCnt);
+
+    sem_unlink("santa");
+    sem_unlink("actionCount");
+
+
+}
 
 int main(int argc, char *argv[]) {
     if (argc != 5) {
@@ -48,11 +78,43 @@ int main(int argc, char *argv[]) {
     }
 
     params_t params;
-    if (parseParams(argv, &params) != 0 ) {
+    if (parseParams(argv, &params) != 0) {
         fprintf(stderr, "Input parameter is not a number\n");
         return 1;
     }
 
+    FILE *fp = fopen("./proj2.out", "w");
+    // make shared memory for sem struct and initialize
+    semaphores_t *sems = mmap(NULL, sizeof(semaphores_t), PROT_READ | PROT_WRITE, MAP_SHARED, 0, 0);
+    semInit(sems);
+
+    // TODO forks fail
+    // Process Santa
+    if (fork() == 0) {
+        fprintf(stdout, "%d Santa: going to sleep\n", 1);
+        exit(0);
+    }
+
+    // Process Elves
+    for (int i = 0; i < params.numElves; i++) {
+        if (fork() == 0) {
+            fprintf(stdout,"Elf %d\n", i+1);
+            usleep(100);
+            fprintf(stdout,"Elf %d\n", i+1);
+            exit(0);
+        }
+    }
+
+    // Process Reindeers
+    for (int i = 0; i < params.numReind; i++) {
+        if (fork() == 0) {
+            fprintf(stdout,"Raindeer %d\n", i);
+            exit(0);
+        }
+    }
+
+    semDestruct(sems);
+    fclose(fp);
 
     return 0;
 }

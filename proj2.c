@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <semaphore.h>
 #include <fcntl.h>
+#include <time.h>
+#include <stdarg.h>
 
 // mmap, munmap
 #include <sys/mman.h>
@@ -19,7 +21,7 @@ typedef struct {
 // struct for semaphores
 typedef struct {
     sem_t *santa;
-    sem_t *actionCnt;
+    sem_t *actionSem;
 }semaphores_t;
 
 int parseParams(char *argv[], params_t *params) {
@@ -52,24 +54,33 @@ int parseParams(char *argv[], params_t *params) {
     return 0;
 }
 
+void flushPrint(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stdout, fmt, args);
+    va_end(args);
+    fflush(stdout);
+}
+
+
 // Initializes semaphores
 int semInit(semaphores_t *sems) {
     // TODO check if sem_open fails
     sems->santa = sem_open("santa", O_CREAT, 0644, 0);
-    sems->actionCnt = sem_open("actionCount", O_CREAT, 0644, 1);
+    sems->actionSem = sem_open("actionCount", O_CREAT, 0644, 1);
 
     return 0;
 }
 
 void semDestruct(semaphores_t *sems) {
     sem_close(sems->santa);
-    sem_close(sems->actionCnt);
+    sem_close(sems->actionSem);
 
     sem_unlink("santa");
     sem_unlink("actionCount");
-
-
 }
+
+
 
 int main(int argc, char *argv[]) {
     if (argc != 5) {
@@ -85,22 +96,30 @@ int main(int argc, char *argv[]) {
 
     FILE *fp = fopen("./proj2.out", "w");
     // make shared memory for sem struct and initialize
-    semaphores_t *sems = mmap(NULL, sizeof(semaphores_t), PROT_READ | PROT_WRITE, MAP_SHARED, 0, 0);
+    semaphores_t *sems = mmap(NULL, sizeof(semaphores_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
     semInit(sems);
+
+    unsigned int *actionCnt = mmap(NULL, sizeof(unsigned int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+    *actionCnt = 1;
 
     // TODO forks fail
     // Process Santa
     if (fork() == 0) {
-        fprintf(stdout, "%d Santa: going to sleep\n", 1);
+        sem_wait(sems->actionSem);
+        flushPrint("%d: Santa: going to sleep\n", (*actionCnt)++);
+        sem_post(sems->actionSem);
         exit(0);
     }
 
     // Process Elves
     for (int i = 0; i < params.numElves; i++) {
         if (fork() == 0) {
-            fprintf(stdout,"Elf %d\n", i+1);
-            usleep(100);
-            fprintf(stdout,"Elf %d\n", i+1);
+            flushPrint("%d: Elf %d: started\n", (*actionCnt)++, i+1);
+            srand(time(NULL) * getpid());
+
+            usleep(1000 * (random() % params.timeElf));
+
+            flushPrint("%d: Elf %d: need help\n", (*actionCnt)++, i+1);
             exit(0);
         }
     }
@@ -108,12 +127,16 @@ int main(int argc, char *argv[]) {
     // Process Reindeers
     for (int i = 0; i < params.numReind; i++) {
         if (fork() == 0) {
-            fprintf(stdout,"Raindeer %d\n", i);
+            flushPrint("%d: Raindeer %d\n", (*actionCnt)++, i);
             exit(0);
         }
     }
 
+    sleep(10);
+
     semDestruct(sems);
+    munmap(sems, sizeof(semaphores_t));
+    munmap(actionCnt, sizeof(unsigned int));
     fclose(fp);
 
     return 0;

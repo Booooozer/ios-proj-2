@@ -1,14 +1,20 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <semaphore.h>
 #include <fcntl.h>
 #include <time.h>
 #include <stdarg.h>
-
-// mmap, munmap
 #include <sys/mman.h>
+#include <sys/wait.h>
+
+
+#define sharedMemDestruct munmap(sems, sizeof(semaphores_t));   \
+            munmap(actionCnt, sizeof(int));                     \
+            munmap(elves, sizeof(int));                         \
+            munmap(reindeer, sizeof(int));                      \
+            munmap(closed, sizeof(int));
+
 
 // struct for input parameters
 typedef struct {
@@ -24,6 +30,8 @@ typedef struct {
     sem_t *actionSem;
     sem_t *elfTex;
     sem_t *reindTex;
+    sem_t *startXmas;
+    sem_t *waitHelp;
 }semaphores_t;
 
 int parseParams(char *argv[], params_t *params) {
@@ -56,12 +64,12 @@ int parseParams(char *argv[], params_t *params) {
     return 0;
 }
 
-void flushPrint(const char *fmt, ...) {
+void flushPrint(FILE *fp, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vfprintf(stdout, fmt, args);
+    vfprintf(fp, fmt, args);
     va_end(args);
-    fflush(stdout);
+    fflush(fp);
 }
 
 
@@ -72,6 +80,8 @@ int semInit(semaphores_t *sems) {
     sems->actionSem = sem_open("actionCount", O_CREAT, 0644, 1);    // used to access shared memory
     sems->elfTex = sem_open("elfTex", O_CREAT, 0644, 1);    // block elves, only one at a time can enter help tree
     sems->reindTex = sem_open("reindTex", O_CREAT, 0644, 0);    // block reindeer until last one comes back
+    sems->startXmas = sem_open("startXmas", O_CREAT, 0644, 0);   // tell santa when last reindeer is hitched
+    sems->waitHelp = sem_open("waitHelp", O_CREAT, 0644, 0);   // elves are waiting for help
     return 0;
 }
 
@@ -80,11 +90,15 @@ void semDestruct(semaphores_t *sems) {
     sem_close(sems->actionSem);
     sem_close(sems->elfTex);
     sem_close(sems->reindTex);
+    sem_close(sems->startXmas);
+    sem_close(sems->waitHelp);
 
     sem_unlink("santaSem");
     sem_unlink("actionCount");
     sem_unlink("elfTex");
     sem_unlink("reindTex");
+    sem_unlink("startXmas");
+    sem_unlink("waitHelp");
 }
 
 int main(int argc, char *argv[]) {
@@ -106,76 +120,113 @@ int main(int argc, char *argv[]) {
     semInit(sems);
 
     // shared counter to enumerate actions in output
-    unsigned int *actionCnt = mmap(NULL, sizeof(unsigned int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+    int *actionCnt = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
     *actionCnt = 1;
     // shared counter of elves waiting for santa's help
-    unsigned int *elves = mmap(NULL, sizeof(unsigned int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+    int *elves = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
     // shared counter of reindeer who came back from holidays
-    unsigned int *reindeer = mmap(NULL, sizeof(unsigned int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+    int *reindeer = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+    int *closed = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
     *elves = 0;
     *reindeer = 0;
+    *closed = 0;
 
     srand(time(NULL) * getpid());
 
     // TODO forks fail
     // Process Santa
-    if (fork() == 0) {
+    pid_t santa = fork();
+    if (santa == 0) {
         while (1) {
             // santa is sleeping
             sem_wait(sems->actionSem);
-            flushPrint("%d: Santa: going to sleep\n", (*actionCnt)++);
+            flushPrint(fp, "%d: Santa: going to sleep\n", (*actionCnt)++);
             sem_post(sems->actionSem);
 
             sem_wait(sems->santaSem);
             sem_wait(sems->actionSem);
-            if ((*reindeer) >= 9) {
-                // start christmas
-                for (int i = 0; i < 9; i++) {
+            if ((*reindeer) >= params.numReind) {
+                // starting christmas
+                flushPrint(fp, "%d: Santa: closing workshop\n", (*actionCnt)++);
+                *closed = 1;
+                sem_post(sems->actionSem);
+                for (int i = 0; i < params.numReind; i++) {
                     sem_post(sems->reindTex);
-
-                    // ...
-
                 }
+                // wait for all reindeer to get hitched
+                sem_wait(sems->startXmas);
+                sem_wait(sems->actionSem);
+                flushPrint(fp, "%d: Santa: Christmas started\n", (*actionCnt)++);
+                sem_post(sems->actionSem);
+
+                for (int i = 0; i < params.numElves; i++) {
+                    sem_post(sems->elfTex);
+                }
+
+                exit(0);
             } else if ((*elves) == 3) {
                 // help elves
-                exit(0);
+                flushPrint(fp, "%d: Santa: helping elves\n", (*actionCnt)++);
+                sem_post(sems->actionSem);
+                for (int i = 0; i < 3; i++) {
+                    sem_post(sems->waitHelp);
+                }
             }
-            sem_post(sems->actionSem);
-        }
+        } // Santa while loop
+    } else if (santa < 0) {
+        fprintf(stderr, "Failed to create Santa process\n");
+        semDestruct(sems);
+        sharedMemDestruct
+        fclose(fp);
+        return 1;
     }
 
     // Process Elves
     for (int i = 0; i < params.numElves; i++) {
-        if (fork() == 0) {
+        pid_t elf = fork();
+        if (elf == 0) {
             sem_wait(sems->actionSem);
-            flushPrint("%d: Elf %d: started\n", (*actionCnt)++, i+1);
+            flushPrint(fp, "%d: Elf %d: started\n", (*actionCnt)++, i+1);
             sem_post(sems->actionSem);
 
-            // elf is working
-            usleep(1000 * (random() % params.timeElf));
-
-            // need help
-            sem_wait(sems->elfTex);
-            sem_wait(sems->actionSem);
-            flushPrint("%d: Elf %d: need help\n", (*actionCnt)++, i+1);
-            *elves += 1;
-            if ((*elves) == 3) {
-                // wake up santa
-                sem_post(sems->santaSem);
-            } else {
-                // wait in a queue for more elves
-                sem_post(sems->elfTex);
-            }
-            sem_post(sems->actionSem);
-            exit(0);
+            while (1) {
+                // elf is working
+                usleep(1000 * (random() % params.timeElf));
+                // need help
+                sem_wait(sems->elfTex);
+                sem_wait(sems->actionSem);
+                flushPrint(fp, "%d: Elf %d: need help\n", (*actionCnt)++, i+1);
+                *elves += 1;
+                if ((*elves) == 3) {
+                    // wake up santa
+                    sem_post(sems->santaSem);
+                } else {
+                    // wait in a queue for more elves
+                    sem_post(sems->elfTex);
+                }
+                sem_post(sems->actionSem);
+                if ((*closed) == 1) {
+                    flushPrint(fp, "%d: Elf %d: taking holidays\n", (*actionCnt)++, i+1);
+                    exit(0);
+                } else {
+                    sem_wait(sems->waitHelp);
+                }
+            } // Elf while loop
+        } else if (elf < 0) {
+            fprintf(stderr, "Failed to create Elf process\n");
+            semDestruct(sems);
+            sharedMemDestruct
+            fclose(fp);
+            return 1;
         }
     }
 
     // Process Reindeer
     for (int i = 0; i < params.numReind; i++) {
-        if (fork() == 0) {
+        pid_t reind = fork();
+        if (reind == 0) {
             sem_wait(sems->actionSem);
-            flushPrint("%d: RD %d: rstarted\n", (*actionCnt)++, i);
+            flushPrint(fp, "%d: RD %d: rstarted\n", (*actionCnt)++, i+1);
             sem_post(sems->actionSem);
 
             // Reindeer on holidays
@@ -183,9 +234,9 @@ int main(int argc, char *argv[]) {
 
             // Reindeer came back
             sem_wait(sems->actionSem);
-            flushPrint("%d: RD %d return home", (*actionCnt)++, i);
+            flushPrint(fp, "%d: RD %d return home\n", (*actionCnt)++, i+1);
             *reindeer += 1;
-            if ((*reindeer) == 9) {
+            if ((*reindeer) == params.numReind) {
                 // all are back, wake up santa to start christmas
                 sem_post(sems->santaSem);
             }
@@ -196,21 +247,30 @@ int main(int argc, char *argv[]) {
 
             // all reindeer are here, get hitched
             sem_wait(sems->actionSem);
-            flushPrint("%d: RD %d: get hitched", (*actionCnt)++, i);
+            flushPrint(fp, "%d: RD %d: get hitched\n", (*actionCnt)++, i+1);
+            (*reindeer)--;
+            if ((*reindeer) == 0) {
+                // last reindeer hitched
+                sem_post(sems->startXmas);
+            }
             sem_post(sems->actionSem);
 
             exit(0);
+        } else if (reind < 0) {
+            fprintf(stderr, "Failed to create Reindeer process\n");
+            semDestruct(sems);
+            sharedMemDestruct
+            fclose(fp);
+            return 1;
         }
     }
 
-    sleep(10);
+    // wait for children to die
+    while(wait(NULL) > 0);
 
     // destroy semaphores and free shared memory
     semDestruct(sems);
-    munmap(sems, sizeof(semaphores_t));
-    munmap(actionCnt, sizeof(unsigned int));
-    munmap(elves, sizeof(unsigned int));
-    munmap(reindeer, sizeof(unsigned int));
+    sharedMemDestruct
     fclose(fp);
 
     return 0;

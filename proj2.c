@@ -32,6 +32,7 @@ typedef struct {
     sem_t *reindTex;
     sem_t *startXmas;
     sem_t *waitHelp;
+    sem_t *santaHelping;
 }semaphores_t;
 
 int parseParams(char *argv[], params_t *params) {
@@ -39,7 +40,7 @@ int parseParams(char *argv[], params_t *params) {
     int tmp;
     for (int i = 1; i < 5; i++) {
         tmp = (int)strtol(argv[i], &ptr, 10);
-        if (tmp <= 0 || ptr[0] != '\0') {
+        if (tmp < 0 || ptr[0] != '\0') {
             // couldn't convert parameter
             return -1;
         }
@@ -51,10 +52,10 @@ int parseParams(char *argv[], params_t *params) {
                 params->numReind = tmp;
                 break;
             case 3:
-                params->timeElf = tmp;
+                params->timeElf = tmp + 1;
                 break;
             case 4:
-                params->timeReind = tmp;
+                params->timeReind = tmp + 1;
                 break;
             default:
                 break;
@@ -82,6 +83,7 @@ int semInit(semaphores_t *sems) {
     sems->reindTex = sem_open("reindTex", O_CREAT, 0644, 0);    // block reindeer until last one comes back
     sems->startXmas = sem_open("startXmas", O_CREAT, 0644, 0);   // tell santa when last reindeer is hitched
     sems->waitHelp = sem_open("waitHelp", O_CREAT, 0644, 0);   // elves are waiting for help
+    sems->santaHelping = sem_open("santaHelping", O_CREAT, 0644, 0);   // elves are waiting for help
     return 0;
 }
 
@@ -92,6 +94,7 @@ void semDestruct(semaphores_t *sems) {
     sem_close(sems->reindTex);
     sem_close(sems->startXmas);
     sem_close(sems->waitHelp);
+    sem_close(sems->santaHelping);
 
     sem_unlink("santaSem");
     sem_unlink("actionCount");
@@ -99,6 +102,7 @@ void semDestruct(semaphores_t *sems) {
     sem_unlink("reindTex");
     sem_unlink("startXmas");
     sem_unlink("waitHelp");
+    sem_unlink("santaHelping");
 }
 
 int main(int argc, char *argv[]) {
@@ -161,16 +165,18 @@ int main(int argc, char *argv[]) {
 
                 for (int i = 0; i < params.numElves; i++) {
                     sem_post(sems->elfTex);
+                    sem_post(sems->waitHelp);
                 }
 
                 exit(0);
-            } else if ((*elves) == 3) {
+            } else if ((*elves) >= 3) {
                 // help elves
                 flushPrint(fp, "%d: Santa: helping elves\n", (*actionCnt)++);
-                sem_post(sems->actionSem);
                 for (int i = 0; i < 3; i++) {
                     sem_post(sems->waitHelp);
                 }
+                sem_post(sems->actionSem);
+                sem_wait(sems->santaHelping);
             }
         } // Santa while loop
     } else if (santa < 0) {
@@ -201,16 +207,29 @@ int main(int argc, char *argv[]) {
                     // wake up santa
                     sem_post(sems->santaSem);
                 } else {
-                    // wait in a queue for more elves
+                    sem_post(sems->elfTex);
+                }
+
+                sem_post(sems->actionSem);
+                // wait for santa's help
+                sem_wait(sems->waitHelp);
+
+                sem_wait(sems->actionSem);
+                // received santa's help
+                if ((*closed) == 1) {
+                    flushPrint(fp, "%d: Elf %d: taking holidays\n", (*actionCnt)++, i+1);
+                    sem_post(sems->actionSem);
+                    exit(0);
+                }
+                flushPrint(fp, "%d: Elf %d: get help\n", (*actionCnt)++, i+1);
+                (*elves)--;
+                if ((*elves) == 0) {
+                    sem_post(sems->santaHelping);
                     sem_post(sems->elfTex);
                 }
                 sem_post(sems->actionSem);
-                if ((*closed) == 1) {
-                    flushPrint(fp, "%d: Elf %d: taking holidays\n", (*actionCnt)++, i+1);
-                    exit(0);
-                } else {
-                    sem_wait(sems->waitHelp);
-                }
+
+
             } // Elf while loop
         } else if (elf < 0) {
             fprintf(stderr, "Failed to create Elf process\n");
@@ -230,11 +249,12 @@ int main(int argc, char *argv[]) {
             sem_post(sems->actionSem);
 
             // Reindeer on holidays
-            usleep(1000 * ((params.numReind / 2) + (random() % (params.timeReind / 2))));
+            //usleep(1000 * ((params.timeReind / 2) + (random() % (params.timeReind / 2))));
+            usleep(1000 * (random() % params.timeReind));
 
             // Reindeer came back
             sem_wait(sems->actionSem);
-            flushPrint(fp, "%d: RD %d return home\n", (*actionCnt)++, i+1);
+            flushPrint(fp, "%d: RD %d: return home\n", (*actionCnt)++, i+1);
             *reindeer += 1;
             if ((*reindeer) == params.numReind) {
                 // all are back, wake up santa to start christmas

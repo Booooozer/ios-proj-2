@@ -13,8 +13,8 @@
             munmap(actionCnt, sizeof(int));                     \
             munmap(elves, sizeof(int));                         \
             munmap(reindeer, sizeof(int));                      \
-            munmap(closed, sizeof(int));
-
+            munmap(closed, sizeof(int));                        \
+            munmap(sems, sizeof(semaphores_t));
 
 // struct for input parameters
 typedef struct {

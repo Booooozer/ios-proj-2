@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-std=gnu99 -Wall -Wextra -Werror -pedantic
 
 proj2: proj2.o
-	$(CC) $(CFLAGS) $^ -o $@ -lpthread -lrt -pthread -g
+	$(CC) $(CFLAGS) $^ -o $@ -pthread -g
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $<

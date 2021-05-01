@@ -1,3 +1,11 @@
+/*
+ * Řešení IOS-proj2
+ * Autor: Tomáš Matuš, FIT VUT Brno
+ * Login: xmatus37
+ * Datum: 01.05.2021
+ * Přeloženo: gcc 10.2.0
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>

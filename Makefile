@@ -7,5 +7,8 @@ proj2: proj2.o
 %.o: %.c
 	$(CC) $(CFLAGS) -c $<
 
+zip:
+	zip proj2.zip Makefile *.c
+
 clean:
 	rm -f *.o proj2 proj2.out vgcore*

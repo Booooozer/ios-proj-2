@@ -84,6 +84,14 @@ int semInit(semaphores_t *sems) {
     sems->startXmas = sem_open("startXmas", O_CREAT, 0644, 0);   // tell santa when last reindeer is hitched
     sems->waitHelp = sem_open("waitHelp", O_CREAT, 0644, 0);   // elves are waiting for help
     sems->santaHelping = sem_open("santaHelping", O_CREAT, 0644, 0);   // elves are waiting for help
+
+    if (sems->santaSem == SEM_FAILED || sems->actionSem == SEM_FAILED || sems->elfTex == SEM_FAILED
+        || sems->reindTex == SEM_FAILED || sems->startXmas == SEM_FAILED || sems->waitHelp == SEM_FAILED
+        || sems->santaHelping == SEM_FAILED) {
+
+        return 1;
+    }
+
     return 0;
 }
 
@@ -117,27 +125,39 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    FILE *fp = fopen("./proj2.out", "w");
-
     // make shared memory for sem struct and initialize
     semaphores_t *sems = mmap(NULL, sizeof(semaphores_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
-    semInit(sems);
+    if (semInit(sems) == 1) {
+        fprintf(stderr, "Failed to initialize semaphore\n");
+        semDestruct(sems);
+    }
 
     // shared counter to enumerate actions in output
     int *actionCnt = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
-    *actionCnt = 1;
     // shared counter of elves waiting for santa's help
     int *elves = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
     // shared counter of reindeer who came back from holidays
     int *reindeer = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+    // flag to signal when santa closes workshop
     int *closed = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, 0, 0);
+
+    if (actionCnt == MAP_FAILED || elves == MAP_FAILED || reindeer == MAP_FAILED || closed == MAP_FAILED) {
+        fprintf(stderr, "Failed to allocate shared memory\n");
+        semDestruct(sems);
+        sharedMemDestruct
+        return 1;
+    }
+
+    *actionCnt = 1;
     *elves = 0;
     *reindeer = 0;
     *closed = 0;
 
+    // output file
+    FILE *fp = fopen("./proj2.out", "w");
+
     srand(time(NULL) * getpid());
 
-    // TODO forks fail
     // Process Santa
     pid_t santa = fork();
     if (santa == 0) {
@@ -233,6 +253,7 @@ int main(int argc, char *argv[]) {
             } // Elf while loop
         } else if (elf < 0) {
             fprintf(stderr, "Failed to create Elf process\n");
+            kill(santa, SIGTERM);
             semDestruct(sems);
             sharedMemDestruct
             fclose(fp);
@@ -278,6 +299,8 @@ int main(int argc, char *argv[]) {
             exit(0);
         } else if (reind < 0) {
             fprintf(stderr, "Failed to create Reindeer process\n");
+            kill(santa, SIGTERM);
+            kill(reind, SIGTERM);
             semDestruct(sems);
             sharedMemDestruct
             fclose(fp);
